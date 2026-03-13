@@ -24,3 +24,7 @@
 **AI**：DeepSeek R1 · Claude API · PyTorch  
 **前端**：React 18 · Vite · Ant Design · TradingView Charts  
 **运维**：Docker · Kubernetes · Prometheus · Grafana
+
+
+
+Init 1.0.0
