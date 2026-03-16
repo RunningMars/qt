@@ -1,342 +1,344 @@
-# 量化自动交易系统 - 顶层设计方案
+# 系统架构设计
 
-## Context（背景）
+> v2.0 | 2026-03-16 | 定稿
 
-本项目旨在构建一个自动化量化策略交易平台，专注于加密货币杠杆合约交易（做多/做空）。系统需要整合 OpenClaw、Claude Code 和 DeepSeek R1 模型 API 等 AI 能力，实现实时市场分析、自主决策、自动交易和风险控制。支持币安和欧易交易平台，提供全自动和半自动（人工审批）两种交易模式。
+## 1. 系统定位
 
-## 市场研究要点
+**币安合约全自动量化交易系统**
 
-### 量化交易系统核心要素
-1. **数据层**：实时行情、历史数据、链上数据、市场情绪
-2. **分析层**：技术指标、AI 模型预测、多因子分析
-3. **策略层**：信号生成、仓位管理、风险控制
-4. **执行层**：订单路由、滑点控制、执行监控
-5. **监控层**：性能追踪、风险预警、回测验证
+| 维度 | 决策 |
+|------|------|
+| 交易所 | 币安 Binance 合约 USDT-M 永续 |
+| 交易类型 | 合约（Futures），支持做多/做空 |
+| 交易频率 | 日线/周线级别（低频） |
+| 触发方式 | 全自动定时触发，无需人工干预 |
+| 标的选择 | R1 动态选标的（扫描成交量 Top 20） |
+| 分析维度 | 技术面（K线+指标）+ 新闻舆情 |
+| 杠杆策略 | R1 建议杠杆，代码做硬上限校验 |
 
-### 关键技术挑战
-- 低延迟数据处理（WebSocket 实时流）
-- 高频交易的并发控制
-- 多交易所 API 统一抽象
-- AI 模型推理速度与准确性平衡
-- 资金安全与风险隔离
+---
 
-## 系统架构设计
+## 2. 整体架构：1+1 模式
 
-### 技术栈选择
-- **后端语言**：Python 3.11+（量化生态成熟，AI 集成便利）
-- **异步框架**：asyncio + aiohttp（高并发 WebSocket 连接）
-- **数据存储**：
-  - TimescaleDB（时序数据）
-  - Redis（实时缓存、消息队列）
-  - PostgreSQL（策略配置、交易记录）
-- **AI 集成**：
-  - DeepSeek R1 API（策略决策）
-  - Claude API（风险评估、策略优化）
-- **监控**：Prometheus + Grafana
-- **回测引擎**：Backtrader / VectorBT
+微服务维护成本高、问题定位难，不适合小团队低频系统。
+采用 **2 个进程**的精简架构：数据服务 + 主服务，通过数据库解耦，无需服务间直接通信。
 
-### 目录结构
+> **行业验证**：调研 Freqtrade、Hummingbot、Jesse、BBGO、GoCryptoTrader 等主流量化框架，
+> 无一例外采用单体或模块化单体架构，没有使用微服务的先例。
+
 ```
-qt/
-├── docs/                      # 文档
-│   ├── architecture.md        # 架构设计
-│   ├── api-integration.md     # API 对接文档
-│   └── strategy-guide.md      # 策略开发指南
-├── src/
-│   ├── core/                  # 核心模块
-│   │   ├── engine.py          # 交易引擎主控
-│   │   ├── event_bus.py       # 事件总线
-│   │   └── state_manager.py   # 状态管理
-│   ├── data/                  # 数据层
-│   │   ├── collectors/        # 数据采集器
-│   │   │   ├── binance.py
-│   │   │   └── okx.py
-│   │   ├── processors/        # 数据处理
-│   │   │   ├── indicators.py  # 技术指标
-│   │   │   └── features.py    # 特征工程
-│   │   └── storage/           # 数据存储
-│   │       ├── timeseries.py
-│   │       └── cache.py
-│   ├── analysis/              # 分析层
-│   │   ├── ai_models/         # AI 模型
-│   │   │   ├── deepseek.py    # DeepSeek R1 集成
-│   │   │   └── claude.py      # Claude 集成
-│   │   ├── technical.py       # 技术分析
-│   │   └── sentiment.py       # 市场情绪分析
-│   ├── strategy/              # 策略层
-│   │   ├── base.py            # 策略基类
-│   │   ├── signals.py         # 信号生成
-│   │   ├── position.py        # 仓位管理
-│   │   └── risk.py            # 风险控制
-│   ├── execution/             # 执行层
-│   │   ├── broker.py          # 交易所抽象
-│   │   ├── order_manager.py   # 订单管理
-│   │   └── executor.py        # 执行器
-│   ├── skills/                # Claude Code Skills
-│   │   ├── strategy_optimizer.py  # 策略优化
-│   │   ├── backtest_runner.py     # 回测执行
-│   │   └── risk_analyzer.py       # 风险分析
-│   └── monitoring/            # 监控层
-│       ├── metrics.py         # 性能指标
-│       ├── alerts.py          # 告警系统
-│       └── dashboard.py       # 监控面板
-├── strategies/                # 策略实现
-│   ├── trend_following.py
-│   ├── mean_reversion.py
-│   └── ai_hybrid.py
-├── tests/
-│   ├── unit/
-│   ├── integration/
-│   └── backtest/
-├── config/
-│   ├── exchanges.yaml         # 交易所配置
-│   ├── strategies.yaml        # 策略参数
-│   └── risk_limits.yaml       # 风险限制
-├── scripts/
-│   ├── setup_db.py
-│   └── migrate.py
-├── requirements.txt
-├── pyproject.toml
-└── README.md
+┌─────────────────────────────────────────────────────┐
+│              Vue 3 前端（监控看板）                   │
+│        持仓概览 / 信号日志 / 盈亏曲线                 │
+└──────────────────────┬──────────────────────────────┘
+                       │ REST + WebSocket
+┌──────────────────────▼──────────────────────────────┐
+│                  主服务（Go）                         │
+│                                                     │
+│  定时调度 → 指标计算 → R1分析 → 风控校验 → 下单执行   │
+│                                                     │
+│           Binance Futures API（下单/查仓）            │
+└──────────────────────┬──────────────────────────────┘
+                       │ 只读
+                  MySQL + Redis
+                       │ 只写
+┌──────────────────────▼──────────────────────────────┐
+│                  数据服务（Go）                       │
+│                                                     │
+│  Binance WebSocket → Top20 实时行情 → Redis          │
+│  Binance REST      → 历史K线        → MySQL          │
+│  CryptoPanic API   → 新闻抓取       → MySQL          │
+│  Alternative.me    → 恐贪指数       → Redis          │
+│  Binance REST      → 资金费率       → MySQL          │
+└─────────────────────────────────────────────────────┘
 ```
 
-## 核心模块设计
+### 架构参考：BBGO 双流模式
 
-### 1. 数据采集模块（data/collectors）
-**功能**：
-- WebSocket 实时订阅（K线、深度、成交）
-- REST API 历史数据拉取
-- 多交易所统一数据格式
-- 断线重连与数据补全
+BBGO（Go 量化框架，GitHub 1.6k stars）采用的双流架构与我们天然对应：
 
-**关键类**：
-- `BaseCollector`：抽象基类
-- `BinanceCollector`：币安实现
-- `OKXCollector`：欧易实现
+```
+BBGO 双流                        我们的 1+1
+─────────────────                ─────────────────
+MarketDataStream（只读）    ←→   数据服务（只写库）
+  ├─ K线                           ├─ K线 → MySQL
+  ├─ 公开成交                       ├─ 实时行情 → Redis
+  └─ 行情数据                       └─ 新闻/恐贪 → MySQL
 
-### 2. AI 决策模块（analysis/ai_models）
-**功能**：
-- DeepSeek R1 API 调用（策略推理）
-- Claude API 调用（风险评估）
-- 提示词工程与上下文管理
-- 模型响应解析与验证
-
-**集成方式**：
-```python
-# DeepSeek R1 用于快速决策
-decision = await deepseek_client.analyze(
-    market_data=current_state,
-    strategy_context=strategy_params
-)
-
-# Claude 用于风险审查
-risk_assessment = await claude_client.evaluate_risk(
-    proposed_trade=decision,
-    portfolio_state=portfolio
-)
+UserDataStream（账户）      ←→   主服务（读库+决策+执行）
+  ├─ 订单更新                       ├─ 指标计算
+  ├─ 成交回报                       ├─ R1 分析
+  └─ 余额变动                       └─ 风控 + 下单
 ```
 
-### 3. 策略引擎（strategy）
-**功能**：
-- 策略生命周期管理
-- 信号生成与过滤
-- 仓位计算（凯利公式、固定比例）
-- 止盈止损逻辑
+---
 
-**策略基类接口**：
-```python
-class BaseStrategy:
-    async def on_bar(self, bar: Bar) -> Signal
-    async def on_tick(self, tick: Tick) -> Signal
-    def calculate_position_size(self, signal: Signal) -> float
-    def check_stop_loss(self, position: Position) -> bool
-    def check_take_profit(self, position: Position) -> bool
+## 3. 服务边界与解耦
+
+### 逻辑边界
+
+**数据服务**：只负责收集和存储，不关心数据如何被使用
+- 维护 Binance WebSocket 长连接（20+ 标的）
+- 拉取历史 K线 → MySQL
+- 轮询新闻/恐贪指数 → MySQL / Redis
+- 采集资金费率 → MySQL
+- 不与主服务直接通信
+
+**主服务**：只负责读取和决策，不关心数据从哪来
+- 从 MySQL 读 K线 → 计算技术指标
+- 从 Redis 读实时价格
+- 从 MySQL 读新闻 → 构建 Prompt → 调用 R1
+- 从 MySQL 读资金费率 → 纳入 R1 分析和风控
+- 风控校验 → 调用 Binance API 下单
+
+### 解耦方式
+
+两个服务通过 MySQL + Redis 共享数据，**无需 HTTP/RPC/消息队列**直接通信。
+
+```
+数据服务                         主服务
+   │── 写 MySQL（K线/新闻）  ──→ │── 读 MySQL
+   │── 写 Redis（实时价格）  ──→ │── 读 Redis
+   └── 互不感知，独立运行         ┘
 ```
 
-### 4. 执行引擎（execution）
-**功能**：
-- 订单生命周期管理
-- 滑点控制与订单拆分
-- 执行反馈与状态同步
-- 异常处理与重试机制
+触发机制：数据服务持续写入，主服务每日定时启动读库，数据必然已就绪。
+日线低频场景下，定时触发足够可靠，无需事件通知机制。
 
-**执行模式**：
-- **全自动模式**：信号直接执行
-- **半自动模式**：信号发送至审批队列，人工确认后执行
+---
 
-### 5. 风险控制模块（strategy/risk）
-**功能**：
-- 单笔交易风险限制
-- 账户总风险敞口控制
-- 最大回撤监控
-- 强制平仓机制
+## 4. 每日自动执行链路
 
-**风控规则**：
-```yaml
-risk_limits:
-  max_position_size: 0.1          # 单仓位最大占比 10%
-  max_leverage: 5                 # 最大杠杆倍数
-  max_daily_loss: 0.05            # 单日最大亏损 5%
-  max_drawdown: 0.15              # 最大回撤 15%
-  stop_loss_pct: 0.02             # 止损比例 2%
-  take_profit_pct: 0.05           # 止盈比例 5%
+```
+每日定时触发（如收盘后）
+    ↓
+数据服务已持续维护 Top20 实时数据
+    ↓
+主服务：拉历史K线 → 计算技术指标（RSI/MACD/BB/EMA）
+    ↓
+主服务：读新闻摘要 + 恐贪指数 + 资金费率
+    ↓
+主服务：构建 Prompt → 调用 DeepSeek R1
+    ↓
+R1 输出 JSON：{标的, 方向, 杠杆建议, 仓位比例, 止损止盈}
+    ↓
+风控硬校验：杠杆 ≤ 10x / 单仓 ≤ 20% / 总敞口 ≤ 50% / 距强平 ≥ 15%
+    ↓
+调用 Binance Futures API 下单
+    ↓
+结果写 MySQL → Redis 推送 → 前端展示
 ```
 
-### 6. 回测系统（tests/backtest）
-**功能**：
-- 历史数据回放
-- 策略性能评估（夏普比率、最大回撤）
-- 参数优化（网格搜索、贝叶斯优化）
-- 回测报告生成
+---
 
-## OpenClaw 集成方案
+## 5. 技术选型
 
-OpenClaw 作为 AI 代理框架，可用于：
+### 最终决策：全 Go 技术栈
 
-1. **策略自动优化**：
-   - 使用 Claude Code Skills 定期分析策略表现
-   - 自动调整参数或建议新策略
+| 决策点 | 结论 |
+|--------|------|
+| 数据服务语言 | Go |
+| 主服务语言 | Go |
+| Binance 签名封装 | 手写 HMAC-SHA256（可参考 adshao/go-binance） |
+| 指标计算库 | cinar/indicator/v2 |
+| 统一技术栈 | 是，只维护一套语言 |
 
-2. **异常诊断**：
-   - 监控系统日志，自动识别异常模式
-   - 生成诊断报告并建议修复方案
+### 选型理由
 
-3. **代码迭代**：
-   - 基于回测结果自动重构策略代码
-   - 生成单元测试
+- 团队熟悉 Go（团队背景：Go/PHP/Java/Python/Node.js/MySQL/Redis/Docker）
+- goroutine 天然适合 20+ WebSocket 长连接并发维护
+- cinar/indicator/v2 覆盖全部所需指标，零依赖，流式处理，自带回测
+- 一套技术栈：统一日志、统一部署、统一问题排查
+- 编译型语言，线上问题更容易复现和定位
+- BBGO（~1.6k stars）和 GoCryptoTrader（~3.4k stars）验证 Go 量化完全可行
 
-**实现方式**：
-- 在 `src/skills/` 目录创建 Claude Code Skills
-- 通过 MCP 协议与交易系统通信
-- 定期触发优化任务（cron 或事件驱动）
+### Go 依赖库清单
 
-## 交易所 API 对接
+| 用途 | 库 | 说明 |
+|------|----|------|
+| Binance API | adshao/go-binance/v2 | Futures 完整支持，内置 HMAC 签名 |
+| 技术指标 | cinar/indicator/v2 | 零依赖，流式处理，支持泛型，自带回测 |
+| 定时任务 | robfig/cron/v3 | 标准 cron 表达式 |
+| WebSocket | gorilla/websocket | Go 标准 WebSocket 库 |
+| HTTP 框架 | 待定（Go 原生 or Gin） | |
+| 日志 | 待定（zap or slog） | |
+| 数据库 ORM | 待定（GORM or sqlx） | |
 
-### 币安（Binance）
-- **现货/合约 API**：`python-binance` 库
-- **WebSocket**：实时 K线、深度、成交
-- **认证**：API Key + Secret（存储在环境变量）
+---
 
-### 欧易（OKX）
-- **统一 API**：`ccxt` 库（支持多交易所）
-- **WebSocket**：订阅频道统一封装
-- **认证**：API Key + Secret + Passphrase
+## 6. 技术指标
 
-**统一抽象层**：
-```python
-class ExchangeAdapter(ABC):
-    @abstractmethod
-    async def get_balance(self) -> Dict
-    @abstractmethod
-    async def place_order(self, order: Order) -> OrderResult
-    @abstractmethod
-    async def cancel_order(self, order_id: str) -> bool
-    @abstractmethod
-    async def get_positions(self) -> List[Position]
+| 指标 | 类型 | 用途 |
+|------|------|------|
+| EMA(20/50/200) | 趋势 | 判断多空趋势排列 |
+| MACD | 趋势/动量 | 金叉死叉信号 |
+| RSI(14) | 动量 | 超买超卖判断 |
+| Bollinger Bands | 波动 | 价格相对位置 |
+| ATR | 波动 | 计算合理止损距离 |
+| 成交量均线 | 量能 | 成交量异常检测 |
+
+全部由 cinar/indicator/v2 提供，无需自行实现。
+
+---
+
+## 7. DeepSeek R1 集成
+
+- **接口**：OpenAI 兼容，`base_url = "https://api.deepseek.com"`
+- **模型**：`deepseek-reasoner`（R1 推理）
+- **定价**：约 $0.55~2.19 / M tokens
+- **每次分析消耗**：Top20 标的数据卡片 + 新闻 ≈ 5000~8000 tokens
+- **定位**：信号确认层，而非独立信号源；要求 60%+ 置信度才执行
+
+### R1 输出格式
+
+```json
+{
+  "selected": [
+    {
+      "symbol": "ETHUSDT",
+      "direction": "long",
+      "leverage": 5,
+      "position_pct": 0.15,
+      "reason": "MACD金叉突破，成交量放大，舆情偏多",
+      "stop_loss_pct": 0.04,
+      "take_profit_pct": 0.12,
+      "confidence": 0.75,
+      "funding_rate_impact": "正费率0.01%，持仓成本可控"
+    }
+  ],
+  "market_summary": "整体偏多，恐贪指数72，建议轻仓",
+  "confidence": "medium",
+  "risk_warnings": ["BTC-ALT相关性>0.9，注意集中风险"]
+}
 ```
 
-## 部署与运维
+### 标的数据卡片（Prompt 输入）
 
-### 开发环境
-- Docker Compose（数据库 + Redis + 应用）
-- 模拟交易模式（使用测试网 API）
+```
+[BTCUSDT]
+价格: 85420 | 24h涨跌: +2.3% | 成交量排名: 1
+RSI(14): 58 | MACD: 金叉(+2d) | BB位置: 中轨上方
+EMA趋势: 多头排列(20>50>200) | ATR(14): 1250
+资金费率: +0.012%/8h（正常范围）
+近期新闻情绪: 偏多(3正/1负)
+恐贪指数: 72(贪婪)
+```
 
-### 生产环境
-- Kubernetes 部署（高可用）
-- 密钥管理：Vault 或 K8s Secrets
-- 日志聚合：ELK Stack
-- 监控告警：Prometheus + AlertManager
+---
 
-## 实施路线图
+## 8. 风控模块
 
-### Phase 1：基础设施（2-3 周）
-- [ ] 项目脚手架搭建
-- [ ] 数据库设计与初始化
-- [ ] 交易所 API 封装
-- [ ] 实时数据采集器
+### 硬规则（代码写死，不允许 R1 覆盖）
 
-### Phase 2：核心引擎（3-4 周）
-- [ ] 事件驱动架构实现
-- [ ] 策略基类与示例策略
-- [ ] 订单执行引擎
-- [ ] 风险控制模块
+```
+MAX_LEVERAGE      = 10      # 杠杆上限
+MAX_SINGLE_POS    = 0.20    # 单仓不超过总资金 20%
+MAX_TOTAL_RISK    = 0.50    # 总风险敞口不超过 50%
+STOP_LOSS_PCT     = 0.05    # 强制止损 5%
+MIN_LIQ_DISTANCE  = 0.15    # 距强平价至少 15%
+```
 
-### Phase 3：AI 集成（2-3 周）
-- [ ] DeepSeek R1 API 集成
-- [ ] Claude API 集成
-- [ ] AI 决策流程设计
-- [ ] 提示词工程优化
+### 补充风控机制
 
-### Phase 4：回测与优化（2-3 周）
-- [ ] 回测引擎开发
-- [ ] 性能指标计算
-- [ ] 参数优化工具
-- [ ] Claude Code Skills 开发
+| 机制 | 说明 |
+|------|------|
+| **日亏损熔断** | 当日亏损超过总资金 X% 时自动停止交易 |
+| **资金费率侵蚀预警** | 持仓期间累计资金费率超阈值时提醒/强制平仓 |
+| **相关性检测** | 多标的持仓时监控 BTC-ALT 相关性，高相关时缩减仓位 |
+| **滑点预算** | 下单时预留 0.1~0.3% 滑点空间 |
+| **逐仓模式** | 使用 Isolated Margin，防止单笔亏损波及全部资金 |
 
-### Phase 5：监控与部署（1-2 周）
-- [ ] 监控面板开发
-- [ ] 告警系统配置
-- [ ] Docker 镜像构建
-- [ ] 生产环境部署
+### 订单状态机
 
-## 关键文件清单
+```
+Created → Submitted → Accepted → Working
+                                    │
+                         ┌──────────┼──────────┐
+                         ↓                     ↓
+                  Partially Filled      Fully Filled（终态）
+                         │
+                         ↓
+                    Cancelled（终态）
+```
 
-### 配置文件
-- `config/exchanges.yaml`：交易所 API 配置
-- `config/strategies.yaml`：策略参数配置
-- `config/risk_limits.yaml`：风险控制规则
-- `.env`：敏感信息（API 密钥）
+---
 
-### 核心代码
-- `src/core/engine.py`：交易引擎主控逻辑
-- `src/data/collectors/binance.py`：币安数据采集
-- `src/data/collectors/okx.py`：欧易数据采集
-- `src/analysis/ai_models/deepseek.py`：DeepSeek 集成
-- `src/analysis/ai_models/claude.py`：Claude 集成
-- `src/strategy/base.py`：策略基类
-- `src/execution/broker.py`：交易所抽象层
-- `src/execution/order_manager.py`：订单管理器
-- `src/strategy/risk.py`：风险控制器
+## 9. 数据源
 
-### 策略示例
-- `strategies/trend_following.py`：趋势跟踪策略
-- `strategies/ai_hybrid.py`：AI 混合策略
+### 舆情/新闻
 
-### Skills
-- `src/skills/strategy_optimizer.py`：策略优化 Skill
-- `src/skills/backtest_runner.py`：回测执行 Skill
+| 数据源 | 内容 | 费用 |
+|--------|------|------|
+| CryptoPanic API | 聚合新闻 + 情绪标签 | 免费 tier |
+| Alternative.me | 市场恐贪指数 | 免费 |
+| CoinGecko Trending | 热门标的排行 | 免费 |
 
-## 验证计划
+### 资金费率
 
-### 单元测试
-- 数据采集器测试（模拟 WebSocket）
-- 策略逻辑测试（固定输入输出）
-- 风控规则测试（边界条件）
+永续合约独有机制，每 8 小时结算一次：
+- **正费率**：多头付空头（做多有成本）
+- **负费率**：空头付多头（做空有成本）
+- 极端费率是市场拥挤的预警信号，R1 需将其纳入分析
 
-### 集成测试
-- 端到端交易流程（使用测试网）
-- AI 模型调用测试
-- 数据库读写测试
+---
 
-### 回测验证
-- 使用历史数据验证策略有效性
-- 对比不同参数配置的表现
-- 压力测试（极端市场条件）
+## 10. 交易策略
 
-### 实盘测试
-- 小资金量试运行（1-2 周）
-- 监控执行质量与滑点
-- 验证风控机制有效性
+| 策略 | 优先级 | 说明 |
+|------|--------|------|
+| **趋势跟踪** | 主策略 | MA 交叉/突破，日线/周线天然适合 |
+| **资金费率监控** | 辅助信号 | 永续合约特有，持续正费率可能是拥挤预警 |
+| **多时间框架分析** | 增强 | R1 同时分析日线趋势 + 周线格局 |
+| 均值回归 | 补充 | 震荡市与趋势互补 |
 
-## 风险提示
+---
 
-1. **技术风险**：API 限流、网络延迟、系统故障
-2. **市场风险**：极端行情、流动性不足、黑天鹅事件
-3. **模型风险**：AI 决策失误、过拟合、数据偏差
-4. **安全风险**：API 密钥泄露、账户被盗、恶意攻击
+## 11. 行业调研
 
-**缓解措施**：
-- 多层风控机制
-- 资金分散管理
-- 实时监控告警
-- 定期安全审计
+### 主流框架对比
+
+| | Freqtrade | Hummingbot | Jesse | BBGO | GoCryptoTrader |
+|--|-----------|------------|-------|------|----------------|
+| 语言 | Python | Python | Python | **Go** | **Go** |
+| 架构 | 模块化单体 | 多组件 | 分层 | 流式双通道 | 引擎+调度器 |
+| 策略定义 | IStrategy 类 | Script/Controller | IStrategy 类 | 组件注入 | 插件式 |
+| 执行模型 | 5s 轮询 | 1s 时钟驱动 | K线驱动 | 事件流 | 事件驱动 |
+| 交易所对接 | ccxt | 自研连接器 | 自研 | 自研+WS | 自研 |
+
+### 共同设计模式
+
+所有框架核心流程一致：
+```
+加载行情 → 计算指标 → 生成信号 → 风控校验 → 执行下单 → 记录结果
+```
+
+WebSocket 重连策略（通用）：
+- 心跳保活（25~30s ping/pong）
+- 指数退避重连（1s → 2s → 4s → 8s → 上限）
+- 重连后恢复全部订阅
+- REST 回填重连期间遗漏数据
+
+### 2025 行业教训
+
+| 教训 | 启示 |
+|------|------|
+| 过度杠杆是头号杀手 | 硬编码杠杆上限不可商量 |
+| 资金费率被误读 | 持续正费率 ≠ 趋势强，可能是拥挤预警 |
+| 回测 ≠ 实盘 | 必须建模滑点和手续费 |
+| 闪崩无预警 | 必须设日亏损熔断机制 |
+| 加密资产高度相关 | 多标的 ≠ 分散风险，需监控相关性 |
+
+---
+
+## 12. 待深入设计
+
+| 优先级 | 模块 | 核心问题 |
+|--------|------|---------|
+| P0 | Binance Futures API 封装 | 参考 adshao/go-binance，确定自研 vs 直接依赖 |
+| P0 | R1 Prompt 设计 | 结构化输出稳定性、容错处理 |
+| P0 | 风控模块 | 强平距离计算、资金费率侵蚀、熔断机制 |
+| P0 | 订单状态机 | 完整生命周期管理、异常状态恢复 |
+| P1 | 数据服务 WebSocket | 多标的并发订阅、断线重连、数据回填 |
+| P1 | 定时任务编排 | 步骤依赖顺序、失败重试策略 |
+| P1 | 回测模块 | 基于 cinar/indicator 回测框架、滑点/手续费建模 |
+| P2 | 相关性监控 | BTC-ALT 相关性实时计算、自动减仓触发 |
